@@ -922,6 +922,7 @@
         chartState.temp = safeHistory.map((entry) => ({ x: Number(entry.ts) || Date.now(), y: Number(entry.temperature_1 ?? entry.temp ?? entry.temperature ?? 0) }));
       }
 
+      // LOAD DATA ON INITIAL PAGE LOAD (Loads history once)
       async function loadData() {
         try {
           const [live, history] = await Promise.all([
@@ -953,16 +954,24 @@
         }
       }
 
+      // REFRESH DATA EVERY 3 SECONDS (Optimized to skip history)
       async function refreshLive() {
         try {
-          const [live, history] = await Promise.all([
-            fetchJson(`${workerUrl}/api/live?device=${encodeURIComponent(deviceName)}`),
-            fetchJson(`${workerUrl}/api/history?device=${encodeURIComponent(deviceName)}`)
-          ]);
+          // ONLY fetch the live data endpoint to prevent 15s delays
+          const live = await fetchJson(`${workerUrl}/api/live?device=${encodeURIComponent(deviceName)}`);
 
           lastResponse = live;
           updateStatus(live);
-          setupPlayback(history.items || []);
+
+          if (!live.ts) live.ts = Date.now();
+          
+          // Append the new live row to our local history array
+          historyPlayback.all.push(live);
+
+          // Prevent memory leaks if left open for days
+          if (historyPlayback.all.length > 2000) {
+            historyPlayback.all.shift();
+          }
 
           const sample = live || {};
           chartState.voltage.push({ x: Date.now(), y: Number(sample.total_voltage ?? 0) });
@@ -1023,7 +1032,11 @@
       buildChartGrid();
       bindChartHover();
       renderAllCharts();
+      
+      // Initialize the dashboard
       loadData();
+      
+      // Start the 3-second fast loop
       setInterval(refreshLive, liveRefreshMs);
     </script>
   </body>
