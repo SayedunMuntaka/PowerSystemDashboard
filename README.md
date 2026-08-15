@@ -1,69 +1,40 @@
-# Online Home Power System
+# 1.2kW Smart Battery Monitoring Dashboard
 
-This project is designed for a JBD BMS connected to an ESP32 running ESPHome. The ESP32 pushes live battery telemetry to a Cloudflare Worker, and the Worker stores the latest sample in KV while keeping compact 60-second history for long-term monitoring.
+A real-time, responsive web dashboard built for monitoring a 1.2kW battery system using a JBD BMS (Bluetooth/BLE) via a backend Worker API. It features live data polling, interactive multi-metric charting, dynamic status inference, cell-level telemetry, and a historical playback suite.
 
-## Architecture
+---
 
-- ESP32 + ESPHome sends battery data every 300 ms
-- Cloudflare Worker receives telemetry on `/api/ingest`
-- Worker stores:
-  - latest sample in `latest` KV key
-  - compact 60-second summaries in `history` KV key
-- GitHub Pages hosts the dashboard in `index.html`
-- The dashboard polls the Worker for the latest live data and recent history
+## Features
 
-## Deployment steps
+### 1. Real-Time Telemetry & Smart Inference
+* **Live Updates:** Automatically fetches live metrics every 3 seconds from your backend worker (`/api/live`).
+* **Dynamic Status Derivation:** Intelligently infers system states (Online, Charging, Discharging, Balancing) based on live current and voltage thresholds rather than relying solely on strict boolean flags.
+* **Core Metrics Overview:** Real-time display for:
+    * System Voltage ($V$)
+    * Current ($A$)
+    * Power Draw ($W$)
+    * State of Charge ($SOC\%$)
+    * Remaining Capacity ($Ah$)
+    * Estimated Stored Energy ($Wh$)
 
-### 1) Create the Cloudflare KV namespace
+### 2. Battery Health & Diagnostics
+* **Interactive SOC Gauge:** Conic-gradient visual indicator paired with a dynamic fluid container fill animation representing battery capacity.
+* **Cell-Level Monitoring:** Individual breakdowns for cell voltages, max/min cell callouts, and voltage delta calculation ($V$).
+* **Diagnostics Panel:** Real-time metrics for pack connection status, active charge/load modes, cell spread, and internal temperatures.
+* **Runtime Estimations:** Automatically calculates estimated time-to-full (when charging) and time-to-empty (under load).
 
-```bash
-wrangler kv:namespace create BATTERY_KV
-```
+### 3. Advanced Analytics & Trend Analysis
+* **Multi-Metric Charts:** Dedicated canvas-rendered chart grids for Voltage, Current, Power, SOC, and Temperature.
+* **Interactive Tooltips:** Hover over any chart grid line to inspect exact historical values and time stamps dynamically.
 
-Copy the generated namespace ID into `wrangler.toml`.
+### 4. 7-Day History & Playback Suite
+* **Historical Timeline:** Access historical snapshots fetched from `/api/history`.
+* **Playback Controls:** Scrub through historical data using a custom timeline range slider or use the **Play/Pause** feature to step through logs sequentially.
+* **Manual & Live Modes:** Jump instantly to the latest live sample or select a specific date and time to review past metrics in a detailed log table.
 
-### 2) Configure the Worker secret
+---
 
-In `wrangler.toml`, set:
-
-```toml
-[vars]
-API_TOKEN = "CHANGE_ME"
-```
-
-Or set it with:
-
-```bash
-wrangler secret put API_TOKEN
-```
-
-### 3) Deploy the Worker
-
-```bash
-wrangler deploy
-```
-
-### 4) Update ESPHome config
-
-Replace the placeholder URL and token in the ESPHome YAML:
-
-```yaml
-url: "https://your-worker.example.workers.dev/api/ingest"
-Authorization: "Bearer CHANGE_ME"
-```
-
-### 5) Host the dashboard
-
-Upload `index.html` to GitHub Pages or any static host.
-
-Update the Worker URL in the dashboard script if needed:
-
-```javascript
-const workerUrl = "https://your-worker.example.workers.dev";
-```
-
-## Notes
-
-- Live readings are received from the ESP32 at 300 ms, but they are only retained in the latest sample bucket.
-- History is compacted to 60-second intervals to stay under Cloudflare free-tier limits.
-- The dashboard only pulls live data when the page is open, keeping the browser lightweight.
+## Technical Stack
+* **Frontend:** Pure HTML5, CSS3, and Vanilla JavaScript (Single-file SPA architecture).
+* **Styling:** Custom CSS layout leveraging modular CSS variables, responsive grid structures, and dynamic visual state indicators.
+* **Communication:** Asynchronous REST fetch requests integrated with live polling and fallback error handling.

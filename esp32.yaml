@@ -87,7 +87,7 @@ ble_client:
 jbd_bms_ble:
   - id: bms0
     ble_client_id: client0
-    update_interval: 20s
+    update_interval: 3s
 
 button:
   - platform: jbd_bms_ble
@@ -245,10 +245,10 @@ sensor:
           send_every: 1
 
 interval:
-  - interval: 40s
+  - interval: 20s
     then:
       - http_request.post:
-          url: "https://bmslogger.shafikkazi25.workers.dev/api/ingest"
+          url: "https://bmslogger.shafikkazi25.workers.dev/api/telemetry"
           request_headers:
             Content-Type: application/json
             Authorization: "Bearer myBatteryToken123"
