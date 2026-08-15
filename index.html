@@ -13,7 +13,7 @@
           <div class="logo" aria-hidden="true"></div>
           <div>
             <h1>1.2KW Smart Battery</h1>
-            <div class="subtitle">Real-time JBD BMS monitoring • live + compact history</div>
+            <div class="subtitle">Real-time JBD BMS monitoring • 6-Month historical archive</div>
           </div>
         </div>
         <div class="header-actions">
@@ -50,27 +50,27 @@
           <div class="segment-grid">
             <div class="segment-card blue">
               <span>Voltage</span>
-              <strong><span id="voltageValue">--</span> V</strong>
+              <div class="card-value-wrap"><span id="voltageValue">--</span> <span class="card-unit">V</span></div>
             </div>
             <div class="segment-card orange">
               <span>Current</span>
-              <strong><span id="currentValue">--</span> A</strong>
+              <div class="card-value-wrap"><span id="currentValue">--</span> <span class="card-unit">A</span></div>
             </div>
             <div class="segment-card green">
               <span>Power</span>
-              <strong><span id="powerValue">--</span> W</strong>
+              <div class="card-value-wrap"><span id="powerValue">--</span> <span class="card-unit">W</span></div>
             </div>
             <div class="segment-card purple">
               <span>SOC</span>
-              <strong><span id="socValue">--</span> %</strong>
+              <div class="card-value-wrap"><span id="socValue">--</span> <span class="card-unit">%</span></div>
             </div>
             <div class="segment-card cyan">
               <span>Capacity</span>
-              <strong><span id="capacityValue">--</span> Ah</strong>
+              <div class="card-value-wrap"><span id="capacityValue">--</span> <span class="card-unit">Ah</span></div>
             </div>
             <div class="segment-card amber">
               <span>Energy</span>
-              <strong><span id="energyValue">--</span> Wh</strong>
+              <div class="card-value-wrap"><span id="energyValue">--</span> <span class="card-unit">Wh</span></div>
             </div>
           </div>
         </div>
@@ -124,11 +124,11 @@
             <div class="chip"><span class="chip-dot" id="batteryDot"></span><span id="batteryMode">Standby</span></div>
           </div>
           <div class="battery-shell">
+            <div class="battery-terminal" aria-hidden="true"></div>
             <div class="battery-box">
               <div class="soc-value" id="socBubble">--%</div>
               <div class="battery-fill" id="batteryFill"></div>
             </div>
-            <div class="battery-terminal" aria-hidden="true"></div>
           </div>
 
           <div class="summary-stack">
@@ -205,14 +205,41 @@
           </div>
         </div>
       </section>
+
+      <!-- 6-MONTH ARCHIVE SECTION WITH MONTH FILTER -->
+      <section class="daily-summary-grid">
+        <div class="card panel full-width-panel">
+          <div class="panel-header">
+            <h2 class="panel-title">6-Month Daily Power Log Archive</h2>
+            <div class="filter-group">
+              <label for="archiveMonthSelect">Select Month:</label>
+              <select id="archiveMonthSelect" class="mini-select">
+                <option value="">Loading months...</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-wrap daily-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Data Samples Logged</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="dailyHistoryTable">
+                <tr><td colspan="3">Select a month to view logs...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </div>
 
     <script>
       const workerUrl = "https://bmslogger.shafikkazi25.workers.dev";
       const deviceName = "jbd-bms-ble";
       const liveRefreshMs = 3000;
-      let lastRecordedTs = null; // Track the last recorded timestamp to prevent duplicates
-      
       const chartState = { voltage: [], current: [], power: [], soc: [], temp: [] };
       const seriesColors = {
         voltage: "#68d7ff",
@@ -221,15 +248,12 @@
         soc: "#8b7cff",
         temp: "#f97316"
       };
-      const visibleSeries = { voltage: true, current: true, power: true, soc: true, temp: true };
       const historyPlayback = {
         all: [],
         currentIndex: 0,
         timer: null,
         playing: false
       };
-      let activeSeries = "voltage";
-      let lastResponse = null;
       const chartTooltip = document.getElementById("chartTooltip");
 
       function toLocalDateInput(dateValue) {
@@ -267,15 +291,12 @@
 
       function getCellVoltages(data) {
         const cellKeys = ["cell_voltage_1", "cell_voltage_2", "cell_voltage_3", "cell_voltage_4", "cell_1", "cell_2", "cell_3", "cell_4"];
-
         const arrayValues = Array.isArray(data.cell_voltages)
           ? data.cell_voltages.map((value) => Number(value) || 0)
           : [];
-
         const extractedValues = cellKeys
           .map((key) => Number(data[key]))
           .filter((value) => Number.isFinite(value) && value > 0);
-
         return arrayValues.length ? arrayValues : extractedValues;
       }
 
@@ -300,19 +321,19 @@
       function resolveStatusFlags(data) {
         const current = Number(data.current ?? 0);
         const voltage = Number(data.total_voltage ?? 0);
-
         const isOnline = data.online_status === true || data.online_status === 1 || data.online === true || voltage > 0;
         const isCharging = data.charging === true || data.charging === 1 || data.is_charging === true || current > 0.1;
         const isDischarging = data.discharging === true || data.discharging === 1 || data.is_discharging === true || current < -0.1;
-        const isBalancing = data.balancing === true || data.balancing === 1 || data.is_balancing === true;
-
+        const isBalancing = data.balancing === true || data.balancing === 1 || 
+                            data.is_balancing === true || data.is_balancing === 1 || 
+                            data.balance === true || data.balance === 1 ||
+                            data.balancing_status === true || data.balancing_status === 1;
         return { isOnline, isCharging, isDischarging, isBalancing, current };
       }
 
       function renderStatusList(data) {
         const cellStats = getCellStats(data);
         const flags = resolveStatusFlags(data);
-
         const items = [
           { label: "Online", value: flags.isOnline ? "Online" : "Offline" },
           { label: "Charging", value: flags.isCharging ? "Active" : "Idle" },
@@ -323,7 +344,6 @@
           { label: "Min / Max cell", value: `${formatNumber(cellStats.min, 3)} / ${formatNumber(cellStats.max, 3)} V` },
           { label: "Estimated energy", value: `${formatNumber(Math.max(0, Number(data.total_voltage || 0) * Number(resolveCapacityValue(data) || 0)), 0)} Wh` }
         ];
-
         const list = document.getElementById("statusList");
         list.innerHTML = items.map(item => `
           <li>
@@ -396,7 +416,6 @@
         const soc = Number(data.state_of_charge || 0);
         const nominalCapacity = Number(data.nominal_capacity || 0);
         const remainingCapacity = Number(data.capacity_remaining || 0);
-
         const capacityForEstimate = remainingCapacity > 0 ? remainingCapacity : (nominalCapacity > 0 ? (nominalCapacity * soc) / 100 : 0);
 
         const toFull = current > 0 && soc < 100
@@ -423,11 +442,9 @@
           data.remaining_capacity_ah,
           data.capacityRemaining
         ];
-
         const rawCapacity = candidates
           .map((value) => Number(value ?? 0))
           .find((value) => value > 0) || 0;
-
         const nominalCapacity = Number(data.nominal_capacity ?? 0);
         const soc = Number(data.state_of_charge ?? 0);
 
@@ -498,6 +515,7 @@
             `<li><span>Pack status</span><strong>${flags.isOnline ? "Connected" : "Offline"}</strong></li>`,
             `<li><span>Charge mode</span><strong>${flags.isCharging ? "Charging" : "Idle"}</strong></li>`,
             `<li><span>Load mode</span><strong>${flags.isDischarging ? "Discharging" : "Idle"}</strong></li>`,
+            `<li><span>Cell balance</span><strong>${flags.isBalancing ? "Active" : "Idle"}</strong></li>`,
             `<li><span>Cell spread</span><strong>${formatNumber(cellStats.delta, 3)} V</strong></li>`,
             `<li><span>Temperature</span><strong>${formatNumber(temp, 1)} °C</strong></li>`,
             `<li><span>Power draw</span><strong>${formatNumber(power, 0)} W</strong></li>`
@@ -524,8 +542,7 @@
           return;
         }
 
-        // Updated limit to 30 rows
-        const rows = history.slice(-30).reverse();
+        const rows = history.slice(-12).reverse();
         tbody.innerHTML = rows.map((entry) => {
           const batteryState = resolveBatteryMode(entry);
           const isSelected = selectedTs !== null && Number(entry.ts) === Number(selectedTs);
@@ -540,6 +557,59 @@
             </tr>
           `;
         }).join("");
+      }
+
+      function renderDailyHistoryTable(dailyLogs) {
+        const tbody = document.getElementById("dailyHistoryTable");
+        if (!dailyLogs || !dailyLogs.length) {
+          tbody.innerHTML = '<tr><td colspan="3">No records found for this month.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = dailyLogs.map(item => `
+          <tr>
+            <td><strong>${item.date || '--'}</strong></td>
+            <td>${item.entries || 0} samples logged</td>
+            <td><span class="badge good">Archived</span></td>
+          </tr>
+        `).join("");
+      }
+
+      async function fetchMonthlyLogs(monthString) {
+        if (!monthString) return;
+        try {
+          const res = await fetch(`${workerUrl}/api/daily-history?device=${encodeURIComponent(deviceName)}&month=${encodeURIComponent(monthString)}`);
+          const data = await res.json();
+          renderDailyHistoryTable(data.items || []);
+        } catch (err) {
+          console.error("Failed to load monthly logs", err);
+        }
+      }
+
+      async function initializeMonthFilter() {
+        const select = document.getElementById("archiveMonthSelect");
+        try {
+          const res = await fetch(`${workerUrl}/api/available-months?device=${encodeURIComponent(deviceName)}`);
+          const data = await res.json();
+          const months = data.months || [];
+
+          if (!months.length) {
+            select.innerHTML = '<option value="">No history available</option>';
+            renderDailyHistoryTable([]);
+            return;
+          }
+
+          select.innerHTML = months.map(m => `<option value="${m}">${m}</option>`).join("");
+          select.value = months[0];
+          fetchMonthlyLogs(months[0]);
+
+          select.onchange = (e) => {
+            fetchMonthlyLogs(e.target.value);
+          };
+        } catch (err) {
+          console.error("Failed to load available months", err);
+          select.innerHTML = '<option value="">Error loading months</option>';
+        }
       }
 
       function applyHistorySelection(index) {
@@ -557,8 +627,7 @@
         document.getElementById("historySelectedLabel").textContent = formatTime(item.ts);
         document.getElementById("historyCountLabel").textContent = `${items.length} samples`;
 
-        // Updated limit window to 30 rows
-        const startIndex = Math.max(0, safeIndex - 29);
+        const startIndex = Math.max(0, safeIndex - 11);
         const windowItems = items.slice(startIndex, safeIndex + 1);
         renderHistoryTable(windowItems, Number(item.ts));
 
@@ -747,13 +816,6 @@
         }
 
         ctx.beginPath();
-        ctx.strokeStyle = "rgba(255,255,255,0.35)";
-        ctx.moveTo(plotLeft, plotTop);
-        ctx.lineTo(plotLeft, plotBottom);
-        ctx.lineTo(plotRight, plotBottom);
-        ctx.stroke();
-
-        ctx.beginPath();
         const linePath = values.map((point, index) => {
           const x = plotLeft + ((Number(point.x) - timeMin) / timeRange) * (plotRight - plotLeft);
           const y = plotBottom - ((Number(point.y) - rangeMin) / yRange) * (plotBottom - plotTop);
@@ -839,11 +901,13 @@
             const rect = canvas.getBoundingClientRect();
             const mouseX = event.clientX - rect.left;
             const mouseY = event.clientY - rect.top;
-            const padding = 16;
-            const plotLeft = padding;
-            const plotRight = canvas.width - padding;
-            const plotTop = padding;
-            const plotBottom = canvas.height - padding;
+            
+            // Fixed padding synchronization
+            const padding = { top: 26, right: 16, bottom: 34, left: 52 };
+            const plotLeft = padding.left;
+            const plotRight = canvas.width - padding.right;
+            const plotTop = padding.top;
+            const plotBottom = canvas.height - padding.bottom;
 
             if (mouseX < plotLeft || mouseX > plotRight || mouseY < plotTop || mouseY > plotBottom) {
               chartTooltip.classList.add("hidden");
@@ -878,16 +942,8 @@
       }
 
       async function fetchJson(url) {
-        const response = await fetch(url, {
-          headers: {
-            Accept: "application/json"
-          }
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
+        const response = await fetch(url, { headers: { Accept: "application/json" } });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.json();
       }
 
@@ -907,18 +963,11 @@
             fetchJson(`${workerUrl}/api/history?device=${encodeURIComponent(deviceName)}`)
           ]);
 
-          lastResponse = live;
           updateStatus(live);
-
-          // Track the latest loaded timestamp
-          if (history.items && history.items.length > 0) {
-            lastRecordedTs = history.items[history.items.length - 1].ts;
-          } else if (live && live.ts) {
-            lastRecordedTs = live.ts;
-          }
-
           setupPlayback(history.items || []);
           renderHistoryTable(history.items || [], Number((history.items || [])[history.items.length - 1]?.ts || 0));
+          
+          initializeMonthFilter();
 
           const sample = live || {};
           if (Array.isArray(history.items) && history.items.length) {
@@ -942,41 +991,28 @@
       async function refreshLive() {
         try {
           const live = await fetchJson(`${workerUrl}/api/live?device=${encodeURIComponent(deviceName)}`);
-
-          lastResponse = live;
           updateStatus(live);
 
           if (!live.ts) live.ts = Date.now();
-          
-          // Timestamp duplicate check
-          if (live.ts !== lastRecordedTs) {
-            lastRecordedTs = live.ts;
-            historyPlayback.all.push(live);
+          historyPlayback.all.push(live);
+          if (historyPlayback.all.length > 2000) historyPlayback.all.shift();
 
-            if (historyPlayback.all.length > 2000) {
-              historyPlayback.all.shift();
-            }
-
-            const sample = live || {};
-            const now = Date.now();
-            chartState.voltage.push({ x: now, y: Number(sample.total_voltage ?? 0) });
-            chartState.current.push({ x: now, y: Number(sample.current ?? 0) });
-            chartState.power.push({ x: now, y: Number(sample.power ?? 0) });
-            chartState.soc.push({ x: now, y: Number(sample.state_of_charge ?? 0) });
-            chartState.temp.push({ x: now, y: Number(sample.temperature_1 ?? sample.temp ?? sample.temperature ?? 0) });
-
-            const maxPoints = 240;
-            if (chartState.voltage.length > maxPoints) {
-              Object.keys(chartState).forEach((key) => {
-                if (Array.isArray(chartState[key])) {
-                  chartState[key].shift();
-                }
-              });
-            }
-          }
+          const sample = live || {};
+          chartState.voltage.push({ x: Date.now(), y: Number(sample.total_voltage ?? 0) });
+          chartState.current.push({ x: Date.now(), y: Number(sample.current ?? 0) });
+          chartState.power.push({ x: Date.now(), y: Number(sample.power ?? 0) });
+          chartState.soc.push({ x: Date.now(), y: Number(sample.state_of_charge ?? 0) });
+          chartState.temp.push({ x: Date.now(), y: Number(sample.temperature_1 ?? sample.temp ?? sample.temperature ?? 0) });
 
           if (!historyPlayback.playing) {
             jumpToLatestHistory();
+          }
+
+          const maxPoints = 240;
+          if (chartState.voltage.length > maxPoints) {
+            Object.keys(chartState).forEach((key) => {
+              if (Array.isArray(chartState[key])) chartState[key].shift();
+            });
           }
 
           renderAllCharts();
@@ -988,9 +1024,7 @@
       }
 
       document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) {
-          refreshLive();
-        }
+        if (!document.hidden) refreshLive();
       });
 
       document.getElementById("historySlider").addEventListener("input", (event) => {
