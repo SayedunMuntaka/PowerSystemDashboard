@@ -240,6 +240,10 @@
       const workerUrl = "https://bmslogger.shafikkazi25.workers.dev";
       const deviceName = "jbd-bms-ble";
       const liveRefreshMs = 3000;
+      const OFFLINE_TIMEOUT = 60000; // Mark the device offline if the newest stored sample is older than 60 seconds
+      let liveRequestInProgress = false;
+      let lastLiveTimestamp = 0;
+      let lastHistoryTimestamp = 0;
       const chartState = { voltage: [], current: [], power: [], soc: [], temp: [] };
       const seriesColors = {
         voltage: "#68d7ff",
@@ -724,11 +728,11 @@
 
       const chartMetricOrder = ["voltage", "current", "power", "soc", "temp"];
       const chartMetricLabels = {
-        voltage: { label: "Voltage", unit: "V", color: seriesColors.voltage, min: 8, max: 15 },
-        current: { label: "Current", unit: "A", color: seriesColors.current, min: -100, max: 100 },
-        power: { label: "Power", unit: "W", color: seriesColors.power, min: -800, max: 800 },
+        voltage: { label: "Voltage", unit: "V", color: seriesColors.voltage, min: 11, max: 14.6 },
+        current: { label: "Current", unit: "A", color: seriesColors.current, min: -80, max: 80 },
+        power: { label: "Power", unit: "W", color: seriesColors.power, min: -700, max: 700 },
         soc: { label: "SOC", unit: "%", color: seriesColors.soc, min: 0, max: 100 },
-        temp: { label: "Temp", unit: "°C", color: seriesColors.temp, min: 0, max: 60 }
+        temp: { label: "Temp", unit: "°C", color: seriesColors.temp, min: 22, max: 45 }
       };
 
       function buildChartGrid() {
@@ -942,9 +946,32 @@
       }
 
       async function fetchJson(url) {
-        const response = await fetch(url, { headers: { Accept: "application/json" } });
+        const response = await fetch(url, {
+          headers: { Accept: "application/json" },
+          cache: "no-store"
+        });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.json();
+      }
+
+      function updateLiveFreshness(live) {
+        const sampleTimestamp = Number(live?.ts || 0);
+
+        if (!Number.isFinite(sampleTimestamp) || sampleTimestamp <= 0) {
+          setStatusBadge("Offline", "offline");
+          return false;
+        }
+
+        lastLiveTimestamp = sampleTimestamp;
+        const ageMs = Date.now() - sampleTimestamp;
+
+        if (ageMs > OFFLINE_TIMEOUT) {
+          setStatusBadge("Offline", "offline");
+          return false;
+        }
+
+        setStatusBadge("Live", "good");
+        return true;
       }
 
       function applyHistoryToChart(historyItems) {
@@ -966,8 +993,10 @@
           updateStatus(live);
           setupPlayback(history.items || []);
           renderHistoryTable(history.items || [], Number((history.items || [])[history.items.length - 1]?.ts || 0));
-          
-          initializeMonthFilter();
+
+          lastHistoryTimestamp = Number((history.items || [])[history.items.length - 1]?.ts || 0);
+          lastLiveTimestamp = Number(live?.ts || 0);
+          updateLiveFreshness(live);
 
           const sample = live || {};
           if (Array.isArray(history.items) && history.items.length) {
@@ -981,7 +1010,7 @@
           }
 
           renderAllCharts();
-          setStatusBadge("Live", "good");
+          updateLiveFreshness(live);
         } catch (error) {
           console.error(error);
           setStatusBadge("Offline", "offline");
@@ -989,20 +1018,33 @@
       }
 
       async function refreshLive() {
+        if (liveRequestInProgress) return;
+        liveRequestInProgress = true;
+
         try {
           const live = await fetchJson(`${workerUrl}/api/live?device=${encodeURIComponent(deviceName)}`);
-          updateStatus(live);
+          const liveTimestamp = Number(live?.ts || 0);
+          const isFresh = updateLiveFreshness(live);
 
-          if (!live.ts) live.ts = Date.now();
+          // Keep showing the last known values, but never append the same database sample repeatedly.
+          if (!Number.isFinite(liveTimestamp) || liveTimestamp <= 0) return;
+
+          if (liveTimestamp <= lastHistoryTimestamp) {
+            return;
+          }
+
+          updateStatus(live);
+          lastHistoryTimestamp = liveTimestamp;
+
           historyPlayback.all.push(live);
           if (historyPlayback.all.length > 2000) historyPlayback.all.shift();
 
           const sample = live || {};
-          chartState.voltage.push({ x: Date.now(), y: Number(sample.total_voltage ?? 0) });
-          chartState.current.push({ x: Date.now(), y: Number(sample.current ?? 0) });
-          chartState.power.push({ x: Date.now(), y: Number(sample.power ?? 0) });
-          chartState.soc.push({ x: Date.now(), y: Number(sample.state_of_charge ?? 0) });
-          chartState.temp.push({ x: Date.now(), y: Number(sample.temperature_1 ?? sample.temp ?? sample.temperature ?? 0) });
+          chartState.voltage.push({ x: liveTimestamp, y: Number(sample.total_voltage ?? 0) });
+          chartState.current.push({ x: liveTimestamp, y: Number(sample.current ?? 0) });
+          chartState.power.push({ x: liveTimestamp, y: Number(sample.power ?? 0) });
+          chartState.soc.push({ x: liveTimestamp, y: Number(sample.state_of_charge ?? 0) });
+          chartState.temp.push({ x: liveTimestamp, y: Number(sample.temperature_1 ?? sample.temp ?? sample.temperature ?? 0) });
 
           if (!historyPlayback.playing) {
             jumpToLatestHistory();
@@ -1016,10 +1058,16 @@
           }
 
           renderAllCharts();
-          setStatusBadge("Live", "good");
+
+          // If the newest sample is already stale, keep the data visible but show Offline.
+          if (!isFresh) {
+            setStatusBadge("Offline", "offline");
+          }
         } catch (error) {
           console.error(error);
           setStatusBadge("Offline", "offline");
+        } finally {
+          liveRequestInProgress = false;
         }
       }
 
@@ -1052,7 +1100,7 @@
       buildChartGrid();
       bindChartHover();
       renderAllCharts();
-      
+      initializeMonthFilter();
       loadData();
       setInterval(refreshLive, liveRefreshMs);
     </script>

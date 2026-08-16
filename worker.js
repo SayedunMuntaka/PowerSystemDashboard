@@ -6,7 +6,7 @@ export default {
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
     };
 
     if (request.method === "OPTIONS") {
@@ -27,12 +27,12 @@ export default {
           balancing: isBalancing
         };
       } catch (e) {
-        return rawPayload;
+        return typeof rawPayload === "string" ? JSON.parse(rawPayload || "{}") : rawPayload;
       }
     }
 
     // 1. INGEST DATA (POST from ESP32)
-    if (request.method === "POST") {
+    if (request.method === "POST" && url.pathname.startsWith("/api/telemetry")) {
       try {
         const body = await request.json();
         const device = body.device || "jbd-bms-ble";
