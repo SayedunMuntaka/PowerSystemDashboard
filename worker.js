@@ -132,26 +132,63 @@ export default {
       const selectedMonth = url.searchParams.get('month'); // Format: YYYY-MM
 
       try {
-        let query = `
-          SELECT 
-            date(datetime(json_extract(raw_payload, '$.ts') / 1000, 'unixepoch')) as date, 
-            COUNT(*) as entries 
-          FROM bms_telemetry 
-          WHERE device = ?
+        // Power is stored in watts. We integrate each sample forward to the next
+        // telemetry sample to calculate daily energy in Wh. The interval is capped
+        // at 60 seconds so a Wi-Fi/ESP32 outage does not create fake energy.
+        const query = `
+          WITH telemetry AS (
+            SELECT
+              id,
+              CAST(json_extract(raw_payload, '$.ts') AS REAL) AS ts_ms,
+              CAST(json_extract(raw_payload, '$.power') AS REAL) AS power_w,
+              date(datetime(json_extract(raw_payload, '$.ts') / 1000, 'unixepoch')) AS sample_date,
+              strftime('%Y-%m', datetime(json_extract(raw_payload, '$.ts') / 1000, 'unixepoch')) AS sample_month,
+              LEAD(CAST(json_extract(raw_payload, '$.ts') AS REAL)) OVER (
+                PARTITION BY device ORDER BY id
+              ) AS next_ts_ms
+            FROM bms_telemetry
+            WHERE device = ?
+          ),
+          daily AS (
+            SELECT
+              sample_date AS date,
+              COUNT(*) AS entries,
+              SUM(
+                CASE
+                  WHEN power_w > 0 AND next_ts_ms > ts_ms THEN
+                    power_w * MIN(next_ts_ms - ts_ms, 60000.0) / 3600000.0
+                  ELSE 0
+                END
+              ) AS charged_wh,
+              SUM(
+                CASE
+                  WHEN power_w < 0 AND next_ts_ms > ts_ms THEN
+                    (-power_w) * MIN(next_ts_ms - ts_ms, 60000.0) / 3600000.0
+                  ELSE 0
+                END
+              ) AS discharged_wh
+            FROM telemetry
+            WHERE (? IS NULL OR sample_month = ?)
+            GROUP BY sample_date
+          )
+          SELECT
+            date,
+            entries,
+            ROUND(COALESCE(charged_wh, 0), 2) AS charged_wh,
+            ROUND(COALESCE(discharged_wh, 0), 2) AS discharged_wh,
+            ROUND(COALESCE(charged_wh, 0) + COALESCE(discharged_wh, 0), 2) AS total_wh
+          FROM daily
+          ORDER BY date DESC
+          LIMIT 31;
         `;
-        let bindings = [device];
 
-        if (selectedMonth) {
-          query += ` AND strftime('%Y-%m', datetime(json_extract(raw_payload, '$.ts') / 1000, 'unixepoch')) = ?`;
-          bindings.push(selectedMonth);
-        }
+        const result = await env.DB.prepare(query)
+          .bind(device, selectedMonth || null, selectedMonth || null)
+          .all();
 
-        query += ` GROUP BY date ORDER BY date DESC LIMIT 30;`;
-
-        const result = await env.DB.prepare(query).bind(...bindings).all();
-        return new Response(JSON.stringify({ items: result.results || [] }), { 
-          status: 200, 
-          headers: { 'Content-Type': 'application/json', ...corsHeaders } 
+        return new Response(JSON.stringify({ items: result.results || [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders }
         });
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: corsHeaders });

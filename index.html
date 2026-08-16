@@ -224,11 +224,14 @@
                 <tr>
                   <th>Date</th>
                   <th>Data Samples Logged</th>
+                  <th>Charged Energy</th>
+                  <th>Discharged Energy</th>
+                  <th>Total Energy</th>
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody id="dailyHistoryTable">
-                <tr><td colspan="3">Select a month to view logs...</td></tr>
+                <tr><td colspan="6">Select a month to view logs...</td></tr>
               </tbody>
             </table>
           </div>
@@ -242,7 +245,6 @@
       const liveRefreshMs = 3000;
       const OFFLINE_TIMEOUT = 60000; // Mark the device offline if the newest stored sample is older than 60 seconds
       let liveRequestInProgress = false;
-      let lastLiveTimestamp = 0;
       let lastHistoryTimestamp = 0;
       const chartState = { voltage: [], current: [], power: [], soc: [], temp: [] };
       const seriesColors = {
@@ -566,14 +568,19 @@
       function renderDailyHistoryTable(dailyLogs) {
         const tbody = document.getElementById("dailyHistoryTable");
         if (!dailyLogs || !dailyLogs.length) {
-          tbody.innerHTML = '<tr><td colspan="3">No records found for this month.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="6">No records found for this month.</td></tr>';
           return;
         }
+
+        const formatEnergy = (value) => `${formatNumber(value, 2)} Wh`;
 
         tbody.innerHTML = dailyLogs.map(item => `
           <tr>
             <td><strong>${item.date || '--'}</strong></td>
             <td>${item.entries || 0} samples logged</td>
+            <td>${formatEnergy(item.charged_wh)}</td>
+            <td>${formatEnergy(item.discharged_wh)}</td>
+            <td><strong>${formatEnergy(item.total_wh)}</strong></td>
             <td><span class="badge good">Archived</span></td>
           </tr>
         `).join("");
@@ -582,7 +589,8 @@
       async function fetchMonthlyLogs(monthString) {
         if (!monthString) return;
         try {
-          const res = await fetch(`${workerUrl}/api/daily-history?device=${encodeURIComponent(deviceName)}&month=${encodeURIComponent(monthString)}`);
+          const res = await fetch(`${workerUrl}/api/daily-history?device=${encodeURIComponent(deviceName)}&month=${encodeURIComponent(monthString)}`, { cache: "no-store" });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
           renderDailyHistoryTable(data.items || []);
         } catch (err) {
@@ -639,12 +647,27 @@
         setHistoryStatus(isLive ? "live" : "manual");
       }
 
+      function normalizeHistoryItems(items) {
+        if (!Array.isArray(items)) return [];
+
+        const byTimestamp = new Map();
+        for (const entry of items) {
+          const timestamp = Number(entry?.ts);
+          if (!Number.isFinite(timestamp) || timestamp <= 0) continue;
+          // Keep the last record returned for a duplicated timestamp.
+          byTimestamp.set(timestamp, entry);
+        }
+
+        return Array.from(byTimestamp.values())
+          .sort((a, b) => Number(a.ts) - Number(b.ts));
+      }
+
       function setupPlayback(items) {
         const slider = document.getElementById("historySlider");
         const dateInput = document.getElementById("historyDate");
         const timeInput = document.getElementById("historyTime");
 
-        historyPlayback.all = Array.isArray(items) ? [...items].sort((a, b) => Number(a.ts) - Number(b.ts)) : [];
+        historyPlayback.all = normalizeHistoryItems(items);
 
         if (!historyPlayback.all.length) {
           slider.max = 0;
@@ -962,9 +985,7 @@
           return false;
         }
 
-        lastLiveTimestamp = sampleTimestamp;
         const ageMs = Date.now() - sampleTimestamp;
-
         if (ageMs > OFFLINE_TIMEOUT) {
           setStatusBadge("Offline", "offline");
           return false;
@@ -975,7 +996,7 @@
       }
 
       function applyHistoryToChart(historyItems) {
-        const safeHistory = Array.isArray(historyItems) ? historyItems : [];
+        const safeHistory = normalizeHistoryItems(historyItems);
         chartState.voltage = safeHistory.map((entry) => ({ x: Number(entry.ts) || Date.now(), y: Number(entry.total_voltage ?? 0) }));
         chartState.current = safeHistory.map((entry) => ({ x: Number(entry.ts) || Date.now(), y: Number(entry.current ?? 0) }));
         chartState.power = safeHistory.map((entry) => ({ x: Number(entry.ts) || Date.now(), y: Number(entry.power ?? 0) }));
@@ -990,17 +1011,18 @@
             fetchJson(`${workerUrl}/api/history?device=${encodeURIComponent(deviceName)}`)
           ]);
 
+          const normalizedHistory = normalizeHistoryItems(history.items || []);
           updateStatus(live);
-          setupPlayback(history.items || []);
-          renderHistoryTable(history.items || [], Number((history.items || [])[history.items.length - 1]?.ts || 0));
+          setupPlayback(normalizedHistory);
+          const latestHistoryTimestamp = Number(normalizedHistory[normalizedHistory.length - 1]?.ts || 0);
+          lastHistoryTimestamp = latestHistoryTimestamp;
+          renderHistoryTable(normalizedHistory, latestHistoryTimestamp);
 
-          lastHistoryTimestamp = Number((history.items || [])[history.items.length - 1]?.ts || 0);
-          lastLiveTimestamp = Number(live?.ts || 0);
-          updateLiveFreshness(live);
+          initializeMonthFilter();
 
           const sample = live || {};
-          if (Array.isArray(history.items) && history.items.length) {
-            applyHistoryToChart(history.items);
+          if (normalizedHistory.length) {
+            applyHistoryToChart(normalizedHistory);
           } else {
             chartState.voltage = [{ x: Date.now(), y: Number(sample.total_voltage ?? 0) }];
             chartState.current = [{ x: Date.now(), y: Number(sample.current ?? 0) }];
@@ -1009,8 +1031,8 @@
             chartState.temp = [{ x: Date.now(), y: Number(sample.temperature_1 ?? sample.temp ?? sample.temperature ?? 0) }];
           }
 
-          renderAllCharts();
           updateLiveFreshness(live);
+          renderAllCharts();
         } catch (error) {
           console.error(error);
           setStatusBadge("Offline", "offline");
@@ -1026,10 +1048,11 @@
           const liveTimestamp = Number(live?.ts || 0);
           const isFresh = updateLiveFreshness(live);
 
-          // Keep showing the last known values, but never append the same database sample repeatedly.
           if (!Number.isFinite(liveTimestamp) || liveTimestamp <= 0) return;
 
+          // Do not append the same stored sample repeatedly while polling every 3 seconds.
           if (liveTimestamp <= lastHistoryTimestamp) {
+            if (!isFresh) setStatusBadge("Offline", "offline");
             return;
           }
 
@@ -1059,7 +1082,6 @@
 
           renderAllCharts();
 
-          // If the newest sample is already stale, keep the data visible but show Offline.
           if (!isFresh) {
             setStatusBadge("Offline", "offline");
           }
@@ -1100,7 +1122,7 @@
       buildChartGrid();
       bindChartHover();
       renderAllCharts();
-      initializeMonthFilter();
+      
       loadData();
       setInterval(refreshLive, liveRefreshMs);
     </script>
